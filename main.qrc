@@ -1,0 +1,9 @@
+<RCC>
+  <qresource prefix="text_browser">
+    <file>res/Untitled_000000.png</file>
+  </qresource>
+  <qresource prefix="buttons">
+    <file>res/start_btn.png</file>
+    <file>res/stop_btn.png</file>
+  </qresource>
+</RCC>
