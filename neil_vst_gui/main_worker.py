@@ -1,14 +1,12 @@
 
 import os
 import logging
-# import logging.config
-# import logging.handlers
-# import multiprocessing
 from multiprocessing import Process, current_process
 from PyQt5.QtCore import pyqtSlot, pyqtSignal, QThread
+
 from neil_vst import VstHost, VstPlugin, VstChainWorker
-from tag_write import TagWriter
-from ui_logging import ProcessLogHandler
+from neil_vst_gui.tag_write import TagWriter
+from neil_vst_gui.ui_logging import ProcessLogHandler
 
 
 class ProcessWorker(Process):

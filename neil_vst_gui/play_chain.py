@@ -4,7 +4,7 @@ import threading
 import numpy
 from queue import Queue
 import logging
-from ui_logging import ProcessLogHandler
+from neil_vst_gui.ui_logging import ProcessLogHandler
 from multiprocessing import current_process
 from PyQt5 import QtCore
 

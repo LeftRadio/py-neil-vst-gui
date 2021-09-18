@@ -1,7 +1,8 @@
 #!python3
 
+import os
 import json
-from ui_settings import UI_Settings
+from neil_vst_gui.ui_settings import UI_Settings
 
 
 base = { "plugins_chain": {} }
@@ -22,7 +23,7 @@ class Job(object):
         # plugins settings
         self.settings = { "title": name, "normalize": {}, "plugins_list": {} }
         #
-        self.job_file = "./_job.json"
+        self.job_file = os.path.dirname(__file__) + "./_job.json"
 
     # -------------------------------------------------------------------------
 

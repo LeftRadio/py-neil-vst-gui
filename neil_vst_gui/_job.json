@@ -1,7 +1,7 @@
 {
     "title": "chain 0",
     "normalize": {
-        "enable": false,
+        "enable": true,
         "target_rms": -19.0,
         "error_db": 0.25
     },
@@ -172,7 +172,7 @@
             "max_channels": 8,
             "params": {
                 "Threshold": {
-                    "value": 0.33294448256492615,
+                    "value": 0.5,
                     "fullscale": 1.0,
                     "normalized": true
                 },

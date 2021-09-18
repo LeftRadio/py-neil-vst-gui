@@ -10,19 +10,19 @@ from queue import Queue
 from multiprocessing import Pipe, freeze_support, current_process
 
 from PyQt5 import QtWidgets, QtCore, QtGui, uic
-from rects_animate import RectsAnimate
-import resources
+
+from neil_vst_gui.ui_logging import MainLogHandler, ProcessLogEmitter
+from neil_vst_gui.ui_settings import UI_Settings
+from neil_vst_gui.main_worker import MainWorker
+from neil_vst_gui.job import Job
+from neil_vst_gui.play_chain import PlayPluginChain
+from neil_vst_gui.rects_animate import RectsAnimate
+import neil_vst_gui.resources
 
 import soundfile
 
-from ui_logging import MainLogHandler, ProcessLogEmitter
-from ui_settings import UI_Settings
-from main_worker import MainWorker
-from job import Job
-from play_chain import PlayPluginChain
 
-
-__version__ = 1.000
+__version__ = '0.5.7'
 
 
 class VSTPluginWindow(QtWidgets.QWidget):
@@ -127,7 +127,7 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
     def _ui_init(self):
         # main ui from default
-        self.uic = uic.loadUi('main.ui', self)
+        self.uic = uic.loadUi(os.path.dirname(__file__) + '/main.ui', self)
         # create the animate graphics before loading the UI settings
         self.anim = RectsAnimate(210, 25, QtGui.QColor.fromRgb(0, 32, 49))
         self.anim_2 = RectsAnimate(210, 25, QtGui.QColor.fromRgb(0, 32, 49))
@@ -153,7 +153,7 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
     def _ui_load_settings(self):
         # create UI settings instance
-        self.ui_settings = UI_Settings("ui_settings.json")
+        self.ui_settings = UI_Settings(os.path.dirname(__file__) + "/ui_settings.json")
         # open and parse json UI settings file
         settings = self.ui_settings.load()
         # main window
@@ -251,15 +251,19 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
     def _put_start_message(self):
 
         import neil_vst
-        import tag_write
+        import neil_vst_gui.tag_write as tag_write
+        import sounddevice
+        import numpy
 
         self._start_msg = [
-            'VST2.4 Host/Plugins chain worker GUI build %.2f beta.' % __version__,
+            'VST2.4 Host/Plugins chain worker GUI build %s beta.' % __version__,
             '',
             'Used:',
             '[ py-neil-vst %s ]' % neil_vst.__version__,
             '[ tag-write-util %s ]' % tag_write.__version__,
             '[ soundfile %s ]' % soundfile.__version__,
+            '[ sounddevice %s ]' % sounddevice.__version__,
+            '[ numpy %s ]' % numpy.__version__,
             '[ PyQt5 ]',
 
             '',
@@ -745,8 +749,6 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         sb = self.textBrowser.verticalScrollBar()
         sb.setValue(sb.maximum())
         self.textBrowser.repaint()
-        #
-        # self.statusBar.showMessage(msg)
 
     def _log_clear(self):
         self.textBrowser.clear()
@@ -757,35 +759,32 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         self.close()
 
     def closeEvent(self, event):
-        # reply = QtWidgets.QMessageBox.question(
-        #     self,
-        #     'QUIT',
-        #     "Are you sure you want to exit the program?",
-        #     QtWidgets.QMessageBox.Yes,
-        #     QtWidgets.QMessageBox.No
-        # )
-        # if reply == QtWidgets.QMessageBox.No:
-        #     event.ignore()
-        #     return
-
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            'QUIT',
+            "Are you sure you want to exit the program?",
+            QtWidgets.QMessageBox.Yes,
+            QtWidgets.QMessageBox.No
+        )
+        if reply == QtWidgets.QMessageBox.No:
+            event.ignore()
+            return
         # save GUI state
-
         self._ui_save_settings()
-
         event.accept()
 
     def process_events(self):
         QtWidgets.QApplication.processEvents()
 
 
-# program start here
-if __name__ == '__main__':
-
+def main():
     freeze_support()
-
     app = QtWidgets.QApplication(sys.argv)
     QtWidgets.QApplication.setStyle(QtWidgets.QStyleFactory.create('Fusion'))
-
     ex = neil_vst_gui_window()
-
     sys.exit(app.exec_())
+
+
+# program start here
+if __name__ == '__main__':
+    main()
