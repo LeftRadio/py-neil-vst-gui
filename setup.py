@@ -3,7 +3,7 @@ import setuptools
 from pathlib import Path
 import os, sys
 
-__version__ = '0.5.7'
+__version__ = '0.5.8b2'
 
 
 this_directory = os.path.dirname(__file__)
@@ -21,7 +21,7 @@ setuptools.setup(
     package_data={
         # And include any *.dat files found in the "data" subdirectory
         # of the "mypkg" package, also:
-        "neil_vst_gui": ["main.ui"],
+        "neil_vst_gui": ["main.ui", "main.ico"],
     },
     license='MIT',
     description='GUI application based on py-neil-vst package',

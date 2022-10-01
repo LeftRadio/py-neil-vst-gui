@@ -9,26 +9,42 @@ import threading
 from queue import Queue
 from multiprocessing import Pipe, freeze_support, current_process
 
-from PyQt5 import QtWidgets, QtCore, QtGui, uic
+from PyQt5 import Qt, QtWidgets, QtCore, QtGui, uic
 
 from neil_vst_gui.ui_logging import MainLogHandler, ProcessLogEmitter
 from neil_vst_gui.ui_settings import UI_Settings
 from neil_vst_gui.main_worker import MainWorker
 from neil_vst_gui.job import Job
 from neil_vst_gui.play_chain import PlayPluginChain
-from neil_vst_gui.rects_animate import RectsAnimate
+from neil_vst_gui.wave_widget import WaveWidget
 import neil_vst_gui.resources
 
-import soundfile
+
+__version__ = '0.5.8b2'
 
 
-__version__ = '0.5.7'
+def resource_path(relative_path):
+    """ Get absolute path to resource, works for dev and for PyInstaller """
+    try:
+        # PyInstaller creates a temp folder and stores path in _MEIPASS
+        base_path = sys._MEIPASS
+    except Exception:
+        base_path = os.path.abspath(os.path.dirname(__file__))
+    return os.path.join(base_path, relative_path)
+
+# unload sonddevice lib for future use in another thread
+def terminate_sounddevice(sounddevice):
+    sounddevice._terminate()
+    del(sounddevice)
+    del(sys.modules["sounddevice"])
 
 
 class VSTPluginWindow(QtWidgets.QWidget):
 
     def __init__(self, plugin, parent=None):
         super(VSTPluginWindow, self).__init__(parent)
+        #
+        self.plugin = plugin
         #
         self.setWindowFlags(self.windowFlags() | QtCore.Qt.Dialog)
         # set self window name
@@ -38,7 +54,6 @@ class VSTPluginWindow(QtWidgets.QWidget):
         self.resize(rect["right"], rect["bottom"])
         # open plugin GUI to self
         plugin.edit_open(int(self.winId()), self.gui_callback)
-        self.plugin = plugin
 
     def closeEvent(self, event):
         self.plugin.edit_close(int(self.winId()))
@@ -63,49 +78,52 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
         # Create the MainThread logging
         self._logger_init()
+        #
+        self.job = Job(logger=self.logger)
+        #
+        self.main_worker = MainWorker(logger=self.logger)
+        #
+        self.play_chain = PlayPluginChain(blocksize=1024, buffersize=8, logger=self.logger)
+
 
         # Init UI
         self._ui_init()
 
-
-        self.job = Job()
-        self.main_worker = MainWorker(logger=self.logger)
-
-        self.play_chain = PlayPluginChain(blocksize=1024, buffersize=10, logger=self.logger)
-        self.play_chain.progress_signal.connect(self.play_progress_update)
-        self.play_chain.stop_signal.connect(self.play_stop_slot)
-
         # ---- connect signals/slots
+
+        # self.play_chain.progress_signal.connect(self.play_progress_update)
+
+        self.play_chain.stop_signal.connect(self.play_stop_slot)
+        self.play_chain.progress_signal.connect(self.play_progress_update)
+        self.wave_widget.change_play_position_clicked.connect(self.play_position_change_end)
 
         self.action_open_job.triggered.connect(self._job_open)
         self.action_save_job.triggered.connect(self._job_save)
+        self.action_save_job_as.triggered.connect(self._job_save_as)
         self.action_show_logger_window.triggered.connect(self.dockWidget.show)
         self.action_exit.triggered.connect(self._close_request)
         #
         self.button_add_files.clicked.connect(self._files_open_click)
-        # self.button_remove_selected_files.clicked.connect(self._files_remove_selected)
         self.button_remove_all_files.clicked.connect(self._files_remove_all)
-        self.tool_button_out_folder.clicked.connect(self._files_out_folder_click)
+        self.button_out_folder.clicked.connect(self._files_out_folder_click)
+        self.push_button_open_out_folder.clicked.connect(self._files_out_folder_open_explorer_click)
         #
         self.button_add_vst.clicked.connect(self._plugin_add_click)
-        self.button_change_vst.clicked.connect(self._plugin_change_click)
-        self.table_widget_processes.itemDoubleClicked.connect(self._plugin_change_click)
         self.button_vst_up_in_chain.clicked.connect(self._plugin_up_click)
         self.button_vst_down_in_chain.clicked.connect(self._plugin_down_click)
         self.button_remove_selected_vst.clicked.connect(self._plugin_remove_selected_click)
         self.button_remove_all_vst.clicked.connect(self._plugin_remove_all)
+        self.table_widget_processes.itemDoubleClicked.connect(self._plugin_open_click)
         #
         self.button_play_start.clicked.connect(self.play_start_click)
         self.button_play_stop.clicked.connect(self.play_stop_click)
         self.table_widget_files.cellClicked.connect(self.play_selected)
-        self.horizontal_slider_play.sliderPressed.connect(self.play_position_change_start)
-        self.horizontal_slider_play.sliderReleased.connect(self.play_position_change_end)
         #
         self.button_start_work.clicked.connect(self.start_work_click)
         self.button_measurment.clicked.connect(self.start_work_click)
         self.button_stop_work.clicked.connect(self.stop_work_click)
         #
-        self.tool_button_metadata_image.clicked.connect(self._tag_metadata_image_select_click)
+        self.tool_button_metadata_image.clicked.connect(self._metadata_image_select_click)
         #
         self.progress_signal.connect(self._progress_slot)
         self.ready_signal.connect(self.end_work)
@@ -121,30 +139,34 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
         self._put_start_message()
 
-
     # -------------------------------------------------------------------------
-
 
     def _ui_init(self):
         # main ui from default
-        self.uic = uic.loadUi(os.path.dirname(__file__) + '/main.ui', self)
-        # create the animate graphics before loading the UI settings
-        self.anim = RectsAnimate(210, 25, QtGui.QColor.fromRgb(0, 32, 49))
-        self.anim_2 = RectsAnimate(210, 25, QtGui.QColor.fromRgb(0, 32, 49))
-        self.horizontalLayout_2.insertWidget(1, self.anim.window)
-        self.horizontalLayout_2.insertWidget(8, self.anim_2.window)
-        # load UI settings
+        self.uic = uic.loadUi(resource_path('main.ui'), self)
+        self.setWindowTitle("NEIL-VST-GUI - %s - [ %s ]" % (__version__, "job default"))
         self._ui_load_settings()
-        # avaible sound devices list
+        #
+        self.wave_widget = WaveWidget(parent=self)
+        self.horizontalLayout_5.addWidget(self.wave_widget)
+
+        # available sound devices list
         import sounddevice
-        devices_list = [d['name'] for d in sounddevice.query_devices() if d['max_output_channels'] > 1]
+        devices = sounddevice.query_devices()
+        devices_str = str(sounddevice.query_devices()).split('\n')
+        for i in range(len(devices)):
+            if devices[i]['max_output_channels'] > 0:
+                self.combo_box_sound_device.addItem(devices_str[i], userData = devices[i]['name'])
+
+        devices_list = [d for d in str(sounddevice.query_devices()).split('\n') if 'Output' in d]
         self.combo_box_sound_device.addItems(devices_list)
+        self.combo_box_sound_device.setCurrentIndex(self.combo_box_sound_device.last_used_index)
+        # unload sonddevice lib for future use in another thread
+        terminate_sounddevice(sounddevice)
 
         # show self main window
         self.show()
-        # update scene background after show the window
-        self.anim.scene.setBackgroundBrush(self.palette().color(QtGui.QPalette.Background))
-        self.anim_2.scene.setBackgroundBrush(self.palette().color(QtGui.QPalette.Background))
+
         # create and start the UI thread
         self.nqueue = Queue()
         t = threading.Thread(target=self.ui_thread)
@@ -153,7 +175,7 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
     def _ui_load_settings(self):
         # create UI settings instance
-        self.ui_settings = UI_Settings(os.path.dirname(__file__) + "/ui_settings.json")
+        self.ui_settings = UI_Settings(resource_path("ui_settings.json"))
         # open and parse json UI settings file
         settings = self.ui_settings.load()
         # main window
@@ -197,12 +219,14 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
             'INFO':     QtGui.QColor(212, 224, 212),
             'DEBUG':    QtGui.QColor(212, 212, 64)
         }
+        #
+        self.combo_box_sound_device.__dict__["last_used_index"] = int(settings.get("sound_device_index", 0))
         # opes/save filepaths
-        self._files_last_path = settings.get("files_last_path", "C://")
-        self._files_out_last_path = settings.get("files_out_last_path", "C://")
-        self.line_edit_out_folder.setText(self._files_out_last_path)
-        self._vst_last_path = settings.get("vst_last_path", "C://")
-        self._job_last_path = settings.get("job_last_path", "C://")
+        self.job.files().last_path = settings.get("files_last_path", "C://")
+        self.job.files().out_folder = settings.get("files_out_last_path", "C://")
+        self.line_edit_out_folder.setText(self.job.files().out_folder)
+        self.job.vst_chain().last_path = settings.get("vst_last_path", "C://")
+        self.job.last_path = settings.get("job_last_path", "C://")
 
     def _ui_save_settings(self):
         # create settings dict
@@ -223,11 +247,13 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
             self.table_widget_files.columnWidth(1),
             self.table_widget_files.columnWidth(2)
         ]
+        #
+        settings["sound_device_index"] = self.combo_box_sound_device.currentIndex()
         # open/save filepaths
-        settings["files_last_path"] = self._files_last_path
-        settings["files_out_last_path"] = self.line_edit_out_folder.text()
-        settings["vst_last_path"] = self._vst_last_path
-        settings["job_last_path"] = self._job_last_path
+        settings["files_last_path"] = self.job.files().last_path
+        settings["files_out_last_path"] = self.job.files().out_folder
+        settings["vst_last_path"] = self.job.vst_chain().last_path
+        settings["job_last_path"] = self.job.last_path
         # save all settings
         self.ui_settings.save(**settings)
 
@@ -242,8 +268,8 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         elif 'Dark' in name:
             self.style_name = 'Dark'
             self.setStyleSheet("background-color: rgb(76, 76, 76);\ncolor: rgb(255, 255, 255);")
-        self.anim.scene.setBackgroundBrush(self.palette().color(QtGui.QPalette.Background))
-        self.anim_2.scene.setBackgroundBrush(self.palette().color(QtGui.QPalette.Background))
+        # self.anim.scene.setBackgroundBrush(self.palette().color(QtGui.QPalette.Background))
+        # self.anim_2.scene.setBackgroundBrush(self.palette().color(QtGui.QPalette.Background))
 
     def _dock_window_lock_changed(self, arg):
         self.dock_window_location = arg
@@ -252,11 +278,12 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
         import neil_vst
         import neil_vst_gui.tag_write as tag_write
+        import soundfile
         import sounddevice
         import numpy
 
         self._start_msg = [
-            'VST2.4 Host/Plugins chain worker GUI build %s beta.' % __version__,
+            'VST2.4 Host/Plugins chain worker GUI build %s.' % __version__,
             '',
             'Used:',
             '[ py-neil-vst %s ]' % neil_vst.__version__,
@@ -272,178 +299,177 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
             '',
             'The contributors:',
             'Vladislav Kamenev :: LeftRadio',
-            'Ildar Muhamadullin :: Muha',
-            '',
             'Special big thanks to all who supported the project.',
             '',
-            "Add input audio files, add needed VST2 plugins and it's settings, set out files metadata.",
-            'That all. Click the "START" and enjoy with the result ;)',
-            '',
             'Wait start the working ...\n' ]
-        self.nqueue.put('start_message')
-        del(neil_vst)
-        del(tag_write)
+        # unload sonddevice lib for future use in another thread
+        terminate_sounddevice(sounddevice)
 
+        self.nqueue.put('start_message')
 
     # -------------------------------------------------------------------------
-
 
     def _job_open(self):
         json_file, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             'open files',
-            self._job_last_path,
+            self.job.last_path,
             'JSON (*.json)'
         )
         if not json_file:
             return
-        self._job_last_path = QtCore.QFileInfo(json_file).path()
 
         try:
+            # load job settings
             self.job.load(json_file)
             #
-            self._plugin_remove_all()
-            for v in self.job.settings["plugins_list"].values():
-                plugin = self._plugin_add(v["path"])
-                self.job.plugin_parameters_set(plugin, v["params"])
+            self._files_table_update(self.job.files().filelist)
+            self.line_edit_out_folder.setText(self.job.files().out_folder)
             #
-            normalize = self.job.settings["normalize"]
-            self.check_box_normalize_enable.setChecked(normalize["enable"]),
-            self.line_edit_normalize_rms_level.setText( str(normalize["target_rms"]) )
-            self.line_edit_normalize_error_db.setText( str(normalize["error_db"]) )
+            # normalize = self.job.settings["normalize"]
+            # self.check_box_normalize_enable.setChecked(normalize["enable"]),
+            # self.line_edit_normalize_rms_level.setText( str(normalize["target_rms"]) )
+            # self.line_edit_normalize_error_db.setText( str(normalize["error_db"]) )
             #
-            self.logger.info("JOB loaded from '%s' [ SUCCESS ]" % os.path.basename(json_file))
-            title = self.windowTitle()
-            self.setWindowTitle("%s [ %s ]" % (title.split("[")[0], os.path.basename(json_file)))
+            self._plugin_table_update()
+            #
+            self._set_metadata(self.job.metadata().data)
+            #
+            self.logger.info("JOB loaded from '%s'" % os.path.basename(json_file))
+            #
+            self.setWindowTitle("%s [ %s ]" % (self.windowTitle().split("[")[0], os.path.basename(json_file)))
         except Exception as e:
-            self.logger.error("JOB load from '%s' [ ERROR ], check job file for correct sctructure" % os.path.basename(json_file))
-            self.logger.debug(str(e))
+            self.logger.error("[ ERROR ] - JOB are NOT load from '%s', check job file for correct structure" % os.path.basename(json_file))
+            self.logger.error(str(e))
 
     def _job_save(self):
+        if self.job.is_default():
+            self._job_save_as()
+            return
+        #
+        self._job_update_dump()
+
+    def _job_save_as(self):
         json_file, _ = QtWidgets.QFileDialog.getSaveFileName(
             self,
             'save file',
-            self._job_last_path,
+            os.path.dirname(self.job.last_path),
             'JSON (*.json)'
         )
         if not json_file:
             return
+        # else:
+        #     self.json_file = json_file
+        # self._job_last_path = QtCore.QFileInfo(self.json_file).path()
+        #
+        self._job_update_dump(json_file)
+
+    def _job_update_dump(self, json_file=None):
         try:
             self.job.update(
-                filepath=json_file,
-                normilize_params=self._normilize_settings()
+                normilize_params=self._normilize_settings(),
+                metadata=self._get_metadata(),
+                filepath=json_file
             )
             self.logger.info("JOB saved to - %s [ SUCCESS ], set DEBUG level for details" % json_file)
-            self.logger.debug("filepath - %s, normilize_params - %s" % (json_file, self._normilize_settings()))
+            self.logger.debug("out_folder - %s, normilize_params - %s, vst_plugins_chain - %s, metadata - %s, filepath - %s" % (self.line_edit_out_folder.text(), str(self._normilize_settings()), [p.name for p in self.job.vst_chain().plugins_list], self._get_metadata(), json_file))
         except Exception as e:
             self.logger.error("JOB save to - %s  [ ERROR ], set DEBUG level for details" % json_file)
             self.logger.debug(str(e))
 
-
     # -------------------------------------------------------------------------
-
 
     def _files_open_click(self):
         in_files = QtWidgets.QFileDialog.getOpenFileNames(
             self,
             'open files',
-            self._files_last_path,
-            'Audio (*.aiff *.flac *.wav *ogg)'
+            self.job.files().last_path,
+            'Audio (*.aiff *.flac *.wav *.ogg *.mp3)'
         )
         if not len(in_files[0]):
             return
-        self._files_last_path = QtCore.QFileInfo(in_files[0][0]).path()
+        self.job.files().add(in_files[0])
+        self._files_table_update(in_files[0])
 
-        self.job.set_in_files(in_files[0])
-        self._files_update_table(self.job.in_files)
+    def _files_table_clear(self):
+        while self.table_widget_files.rowCount():
+            self.table_widget_files.removeRow(0)
 
-    def _files_update_table(self, filelist):
-        table = self.table_widget_files
+    def _files_table_update(self, filelist):
+        import soundfile
 
-        self._files_clear_table()
+        self._files_table_clear()
 
-        for f in sorted(filelist ):
-            if f in [table.item(r, 0).text() for r in range(table.rowCount())]:
+        for f in sorted(filelist):
+            if f in [self.table_widget_files.item(r, 0).text() for r in range(self.table_widget_files.rowCount())]:
                 continue
             #
-            table.setRowCount(table.rowCount() + 1)
+            self.table_widget_files.setRowCount(self.table_widget_files.rowCount() + 1)
             # pathname
-            table.setItem(table.rowCount()-1, 0, QtWidgets.QTableWidgetItem(os.path.basename(f)))
+            self.table_widget_files.setItem(self.table_widget_files.rowCount()-1, 0, QtWidgets.QTableWidgetItem(os.path.basename(f)))
             # size
             item = QtWidgets.QTableWidgetItem("%.2f MB" % (os.stat(f).st_size/(1024*1024)))
             item.setTextAlignment(QtCore.Qt.AlignHCenter)
-            table.setItem(table.rowCount()-1, 1, item)
+            self.table_widget_files.setItem(self.table_widget_files.rowCount()-1, 1, item)
             # description
             chs = ["Mono", "Stereo", "", "4 CH"]
             load_file = soundfile.SoundFile(f, mode='r', closefd=True)
             decs_text = "%s kHz  %s  %s" % (load_file.samplerate/1000, chs[load_file.channels-1], load_file.subtype)
             item = QtWidgets.QTableWidgetItem(decs_text)
             item.setTextAlignment(QtCore.Qt.AlignHCenter)
-            table.setItem(table.rowCount()-1, 2, item)
-
-    def _files_remove_selected(self):
-        indexes = self.table_widget_processes.selectedIndexes()
-        if len(indexes) <= 0:
-            return
-        for i in indexes:
-            self.job.file_remove(self.table_widget_files.item(i, 0).text())
-            self.table_widget_files.removeRow(i)
-
-    def _files_clear_table(self):
-        while self.table_widget_files.rowCount():
-            self.table_widget_files.removeRow(0)
+            self.table_widget_files.setItem(self.table_widget_files.rowCount()-1, 2, item)
 
     def _files_remove_all(self):
-        self._files_clear_table()
-        self.job.files_remove_all()
+        self.job.files().clear()
+        self._files_table_clear()
 
     def _files_out_folder_click(self):
         dir_name = QtWidgets.QFileDialog.getExistingDirectory(
             self,
             "Open Directory",
-            self._files_out_last_path,
+            self.job.files().out_folder,
             QtWidgets.QFileDialog.ShowDirsOnly | QtWidgets.QFileDialog.DontResolveSymlinks
         )
         self.line_edit_out_folder.setText(dir_name)
+        self.job.files().out_folder_update(dir_name)
 
+    def _files_out_folder_open_explorer_click(self):
+        import subprocess
+        path = os.path.normpath(self.job.files().out_folder)
+        subprocess.Popen(r'explorer "%s"' % path)
 
     # -------------------------------------------------------------------------
 
     def play_start_click(self):
-        self._play_position_change_start_flag = False
-        self.play_start_thread()
-
-    def play_start_thread(self, position=0):
-        t = threading.Thread(target=self.play_start, args=(position,))
-        t.daemon = True  # thread dies when main thread exits.
-        t.start()
-
-    def play_start(self, position=0):
-
-        file_index = self.table_widget_files.currentRow()
-        if file_index < 0:
-            return
-
         self.button_play_start.setEnabled(False)
         self.button_play_stop.setEnabled(True)
         self.table_widget_files.setEnabled(False)
 
-        self.play_start_pos_slider = self.horizontal_slider_play.value()
-        play_start_pos = self.play_start_pos_slider / self.horizontal_slider_play.maximum()
+        self.play_start_pos = self.wave_widget.get_play_position()
+        fileinex = self.table_widget_files.currentRow()
+        self.play_start_thread(self.play_start_pos, fileinex)
 
+    def play_start_thread(self, position=0, fileindex=-1):
+        self.play_thread = threading.Thread(target=self.play_start, args=(position,fileidnex,))
+        self.play_thread.daemon = True  # thread dies when main thread exits.
+        self.play_thread.start()
+
+    def play_start(self, position=0, fileindex=-1):
         try:
             self.play_chain.start(
-                filename=self.job.in_files[file_index],
-                audio_device=self.combo_box_sound_device.currentText(),
+                filename=self.job.files().filelist[fileindex],
+                audio_device=self.combo_box_sound_device.currentData(),
                 channels=2,
-                vst_host=self.main_worker.host(),
-                vst_plugins_chain=self.job.vst_plugins_chain,
-                start=play_start_pos
+                vst_host=self.job.vst_chain().host(),
+                vst_plugins_chain=self.job.vst_chain().plugins(),
+                start=position
             )
+        except IndexError as e:
+            self.logger.error("Nothing to play. Please select the file first.")
+            self.play_chain.stop()
         except Exception as e:
             self.logger.error(str(e))
             self.play_chain.stop()
-
 
     def play_stop_click(self):
         self.play_chain.stop()
@@ -452,35 +478,25 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         self.button_play_start.setEnabled(True)
         self.button_play_stop.setEnabled(False)
         self.table_widget_files.setEnabled(True)
-        if self.horizontal_slider_play.value() >= self.horizontal_slider_play.maximum()-1:
-            self.horizontal_slider_play.setValue(self.horizontal_slider_play.minimum())
+        #
+        if self.wave_widget.get_play_position() >= 1.0:
+            self.wave_widget.set_play_position(0)
 
     def play_selected(self, row, column):
-        if row < 0:
-            self.button_play_start.setEnable(False)
-            return
-        self.group_box_play.setTitle(self.group_box_play.title().split(" - ")[0] + " - [ %s ]" % os.path.basename(self.job.in_files[row]))
-        self.button_play_start.setEnabled(True)
-        self.horizontal_slider_play.setEnabled(True)
+        self.label_6.setText(self.label_6.text().split(" - ")[0] + " - [ %s ]" % os.path.basename(self.job.files().filelist[row]))
+        self.wave_widget.set_wave_file(self.job.files().filelist[row])
+        self.wave_widget.set_play_position(0)
 
     def play_progress_update(self, procent_value):
-        if self.play_chain.is_active() and not self._play_position_change_start_flag:
-            slider_val = int(self.play_start_pos_slider + procent_value*self.horizontal_slider_play.maximum())
-            self.horizontal_slider_play.setValue(slider_val)
-        # print(self.horizontal_slider_play.value())
-
-    def play_position_change_start(self):
-        self._play_position_change_start_flag = True
+        self.wave_widget.set_play_position(procent_value)
 
     def play_position_change_end(self):
         if self.play_chain.is_active():
             self.play_chain.stop()
-            sleep(0.25)
-            self.play_start_thread()
-            self._play_position_change_start_flag = False
+            self.play_thread.join()
+            self.play_start_click()
 
     # -------------------------------------------------------------------------
-
 
     def _normilize_settings(self):
         return {
@@ -489,99 +505,87 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
             "error_db": float(self.line_edit_normalize_error_db.text())
         }
 
-    def _plugin_add(self, pathname):
-        try:
-            plugin = self.main_worker.vst_dll_load(pathname, self.logger)
-            self.logger.debug(plugin.info())
-        except Exception as e:
-            self.logger.error('[ ERROR ] while load "%s"' % os.path.basename(pathname))
-            self.logger.debug(str(e))
-            return
+    def _plugin_table_add(self, name):
+        self.table_widget_processes.setRowCount(self.table_widget_processes.rowCount() + 1)
+        item = QtWidgets.QTableWidgetItem(name)
+        item.setTextAlignment(QtCore.Qt.AlignHCenter)
+        self.table_widget_processes.setItem(self.table_widget_processes.rowCount() - 1, 0, item)
 
-        self.job.vst_add_to_chain(plugin)
+    def _plugin_table_clear(self):
+        while self.table_widget_processes.rowCount():
+            self.table_widget_processes.removeRow(0)
+
+    def _plugin_table_update(self):
+        self._plugin_table_clear()
+        for plugin in self.job.vst_chain().plugins_list:
+            self._plugin_table_add(plugin.name)
+
+    def _plugin_swap(self, up):
         #
         table = self.table_widget_processes
-        #
-        index = table.rowCount()
-        table.setRowCount(index+1)
-        #
-        item = QtWidgets.QTableWidgetItem(plugin.name)
-        item.setTextAlignment(QtCore.Qt.AlignHCenter)
-        table.setItem(index, 0, item)
-        #
-        self.logger.info('Add VST - "%s"' % plugin.name)
-        #
-        return plugin
+        select_row = table.currentRow()
+
+        if up:
+            if select_row <= 0:
+                return
+            sign = -1
+        else:
+            if select_row >= table.rowCount() + 1:
+                return
+            sign = +1
+
+        self.job.vst_chain().swap(select_row, select_row + sign)
+
+        select_item = table.takeItem(select_row, 0)
+        change_item = table.takeItem(select_row + sign, 0)
+
+        table.setItem(select_row + sign, 0, select_item)
+        table.setItem(select_row, 0, change_item)
+
+        table.setCurrentCell(select_row + sign, 0, QtCore.QItemSelectionModel.SelectCurrent)
 
     def _plugin_add_click(self):
         vst_dll, _ = QtWidgets.QFileDialog.getOpenFileName(
             self,
             'open VST plugin file',
-            self._vst_last_path,
+            QtCore.QFileInfo(self.job.vst_chain().last_path).path(),
             'VST dll (*.dll)'
         )
         if not vst_dll:
             return
-        self._vst_last_path = QtCore.QFileInfo(vst_dll).path()
-        self._plugin_add(vst_dll)
-
-    def _plugin_change_click(self):
-        index = self.table_widget_processes.currentRow()
-        w = VSTPluginWindow(self.job.vst_plugins_chain[index], parent=self)
-        w.show()
+        # load new vst plugin
+        plugin = self.job.vst_chain().add(vst_dll)
+        # update vst plugins table
+        self._plugin_table_add(plugin.name)
 
     def _plugin_up_click(self):
-        #
-        table = self.table_widget_processes
-        select_row = table.currentRow()
-
-        if select_row <= 0:
-            return
-
-        self.job.vst_swap_in_chain(select_row, select_row - 1)
-
-        select_item = table.takeItem(select_row, 0)
-        change_item = table.takeItem(select_row - 1, 0)
-
-        table.setItem(select_row - 1, 0, select_item)
-        table.setItem(select_row, 0, change_item)
-
-        table.setCurrentCell(select_row - 1, 0, QtCore.QItemSelectionModel.SelectCurrent)
+        self._plugin_swap(up=True)
 
     def _plugin_down_click(self):
-        #
-        table = self.table_widget_processes
-        select_row = table.currentRow()
-
-        if select_row >= table.rowCount()-1:
-            return
-
-        self.job.vst_swap_in_chain(select_row, select_row + 1)
-
-        select_item = table.takeItem(select_row, 0)
-        change_item = table.takeItem(select_row + 1, 0)
-
-        table.setItem(select_row + 1, 0, select_item)
-        table.setItem(select_row, 0, change_item)
-
-        table.setCurrentCell(select_row + 1, 0, QtCore.QItemSelectionModel.SelectCurrent)
+        self._plugin_swap(up=False)
 
     def _plugin_remove_selected_click(self):
         index = self.table_widget_processes.currentRow()
         if index < 0 or index > self.table_widget_processes.rowCount()-1:
             return
+        self.job.vst_chain().remove(index)
         self.table_widget_processes.removeRow(index)
-        self.job.vst_remove_from_chain(index)
 
     def _plugin_remove_all(self):
-        while self.table_widget_processes.rowCount():
-            self.table_widget_processes.removeRow(0)
-        self.job.vst_remove_all()
+        self.job.vst_chain().clear()
+        self._plugin_table_clear()
 
     # -------------------------------------------------------------------------
 
-    def _tag_data(self):
-        return (
+    def _plugin_open_click(self):
+        index = self.table_widget_processes.currentRow()
+        w = VSTPluginWindow(self.job.vst_chain().plugin(index), parent=self)
+        w.show()
+
+    # -------------------------------------------------------------------------
+
+    def _get_metadata(self):
+        return [
             self.line_edit_metadata_author.text(),
             self.line_edit_metadata_artist.text(),
             self.line_edit_metadata_sound_designer.text(),
@@ -590,28 +594,48 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
             self.line_edit_metadata_year.text(),
             self.text_edit_metadata_description.toPlainText(),
             self.line_edit_metadata_image.text()
-        )
+        ]
 
-    def _tag_metadata_image_select_click(self):
+    def _set_metadata(self, metadata):
+        self.line_edit_metadata_author.setText(metadata[0])
+        self.line_edit_metadata_artist.setText(metadata[1])
+        self.line_edit_metadata_sound_designer.setText(metadata[2])
+        self.line_edit_metadata_album_book.setText(metadata[3])
+        self.line_edit_metadata_genre.setText(metadata[4])
+        self.line_edit_metadata_year.setText(metadata[5])
+        self.text_edit_metadata_description.setPlainText(metadata[6])
+        self.line_edit_metadata_image.clear()
+        self.line_edit_metadata_image.insert(metadata[7])
+        self._metadata_image_draw(metadata[7])
+
+    def _metadata_image_draw(self, filepath):
+        try:
+            pixmap = QtGui.QPixmap(filepath)
+            if pixmap.width() > pixmap.height():
+                width = 100
+                height = int(pixmap.height() / (pixmap.width() / 100))
+            else:
+                width = int(pixmap.height() / (pixmap.width() / 140))
+                height = 140
+            self.label_metadata_image_show.setMinimumWidth(width)
+            self.label_metadata_image_show.setMaximumWidth(width)
+            self.label_metadata_image_show.setMinimumHeight(height)
+            self.label_metadata_image_show.setMaximumHeight(height)
+            self.label_metadata_image_show.setPixmap(pixmap)
+        except Exception as e:
+            self.logger.error("Error on draw the selected image [%s]" % str(e))
+
+    def _metadata_image_select_click(self):
         image_file, _ = QtWidgets.QFileDialog.getOpenFileNames(
             self,
             'Open File',
-            self._files_last_path,
+            self.job.files().last_path,
             'Images (*.bmp *.png *.jpg)'
         )
         if not len(image_file):
             return
         self.line_edit_metadata_image.setText(image_file[0])
-        try:
-            pixmap = QtGui.QPixmap(image_file[0])
-            coeff = pixmap.width() / 450
-            self.label_metadata_image_show.setMinimumWidth(450)
-            self.label_metadata_image_show.setMaximumWidth(450)
-            self.label_metadata_image_show.setMinimumHeight(int(pixmap.height() / coeff))
-            self.label_metadata_image_show.setMaximumHeight(int(pixmap.height() / coeff))
-            self.label_metadata_image_show.setPixmap(pixmap)
-        except Exception as e:
-            self.logger.error("Error on draw the selected image [%s]" % str(e))
+        self._metadata_image_draw(image_file[0])
 
     # -------------------------------------------------------------------------
 
@@ -642,25 +666,19 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
     def start_work_click(self):
         """ START button click slot """
         sender_name = self.sender()
-        if not self.button_start_work.isEnabled() or not len(self.job.in_files):
+        if not self.button_start_work.isEnabled() or not len(self.job.files().filelist):
             return
         self.button_start_work.setEnabled(False)
         self.button_measurment.setEnabled(False)
         self.button_stop_work.setEnabled(True)
-        self.tab_input_files.setEnabled(False)
-        self.tab_vst_process.setEnabled(False)
-        self.tab_metadata.setEnabled(False)
-        # set animation is fastest
-        self.anim.timer.setInterval(750)
-
+        self.files_frame.setEnabled(False)
+        self.vst_frame.setEnabled(False)
         # block until all tasks are done
         self.nqueue.join()
-
         # update all job parameters
         self.job.update(
             normilize_params=self._normilize_settings(),
-            out_folder=self.line_edit_out_folder.text(),
-            tag_data=self._tag_data()
+            metadata=self._get_metadata()
         )
 
         try:
@@ -668,8 +686,8 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         except Exception as e:
             self.logger.warning(
                 "VST buffer size is incorrect!"
-                "Please set numberic value in range: [ 1024..65536 ] bytes\n"
-                "Set the default buffer size: [ 1024 ]"
+                "Please set numeric value in range: [ 1024..65536 ] bytes\n"
+                "Set the default buffer size [ 1024 bytes ]"
             )
             vst_buffer_size = 1024
 
@@ -696,15 +714,13 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         self.button_start_work.setEnabled(True)
         self.button_measurment.setEnabled(True)
         self.button_stop_work.setEnabled(False)
-        self.tab_input_files.setEnabled(True)
-        self.tab_vst_process.setEnabled(True)
-        self.tab_metadata.setEnabled(True)
-        self.anim.timer.setInterval(2000)
+        self.files_frame.setEnabled(True)
+        self.vst_frame.setEnabled(True)
 
     old_progr = 0
     def _progress_slot(self, progress):
         if (progress - self.old_progr) > 20:
-            self.anim.timer.setInterval(600 - (progress * 5))
+            # self.anim.timer.setInterval(600 - (progress * 5))
             self.old_progr = progress
         elif not progress:
             self.old_progr = progress
@@ -729,6 +745,7 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
 
     def logging_level_changed(self, level_index):
         levels = [ logging.DEBUG, logging.INFO, logging.WARNING, logging.ERROR ]
+        self.logger.setLevel(levels[level_index])
         self.handler.setLevel(levels[level_index])
         self.workers_logging_level = levels[level_index]
         self.play_chain.log_level = levels[level_index]
@@ -766,11 +783,12 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
             QtWidgets.QMessageBox.Yes,
             QtWidgets.QMessageBox.No
         )
+        # save GUI state
+        self._ui_save_settings()
+        #
         if reply == QtWidgets.QMessageBox.No:
             event.ignore()
             return
-        # save GUI state
-        self._ui_save_settings()
         event.accept()
 
     def process_events(self):
@@ -781,6 +799,7 @@ def main():
     freeze_support()
     app = QtWidgets.QApplication(sys.argv)
     QtWidgets.QApplication.setStyle(QtWidgets.QStyleFactory.create('Fusion'))
+    # QtWidgets.QApplication.setStyle(QtWidgets.QStyleFactory.create('Cleanlooks'))
     ex = neil_vst_gui_window()
     sys.exit(app.exec_())
 

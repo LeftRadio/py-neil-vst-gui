@@ -2,11 +2,14 @@
 import sys
 import threading
 import numpy
-from queue import Queue
 import logging
-from neil_vst_gui.ui_logging import ProcessLogHandler
-from multiprocessing import current_process
+from queue import Queue
 from PyQt5 import QtCore
+
+# import sounddevice
+
+# print(dir(sounddevice.OutputStream))
+# exit()
 
 class PlayPluginChain(QtCore.QObject):
     """docstring for PlayPluginChain"""
@@ -40,19 +43,18 @@ class PlayPluginChain(QtCore.QObject):
 
         if self.play_block_index >= self.buffersize:
             if not self.stream.active:
-                self.logger.info("Audio stream is STARTING for [ %s ] ..." % self.filename)
+                self.logger.info("START audio stream [ %s ]" % self.sounddevice.query_devices(self.stream.device, 'output')['name'])
                 self.stream.start()
             timeout = ((self.blocksize * self.buffersize) / self.vst_host.sample_rate)
             try:
                 self.play_queue.put(data, timeout=timeout*2)
-                self.progress_signal.emit(self.play_block_index / self.play_max_block_index)
+                self.progress_signal.emit(self.start_position + (self.play_block_index / self.play_max_block_index))
             except Exception as e:
                 self.logger.debug("Audio stream buffer is full.")
         else:
             self.play_queue.put_nowait(data)
 
         self.play_block_index += 1
-
 
     def _play_callback(self, outdata, frames, time, status):
         # assert frames == self.blocksize
@@ -73,7 +75,9 @@ class PlayPluginChain(QtCore.QObject):
             self.logger.debug('Audio stream buffer is empty: increase buffersize?')
             outdata[:] = numpy.zeros( (len(outdata), 2), dtype=numpy.float32 )
             self.stream_wait_data_cnt += 1
-            if self.stream_wait_data_cnt >= 10:
+            if self.play_event.is_set():
+                self.stream.stop()
+            elif self.stream_wait_data_cnt >= 10:
                 self.stop()
             # raise sounddevice.CallbackAbort
 
@@ -95,6 +99,7 @@ class PlayPluginChain(QtCore.QObject):
         import sounddevice
         import soundfile
 
+        self.sounddevice = sounddevice
         self.play_queue = Queue(maxsize=self.buffersize)
         self.play_event = threading.Event()
 
@@ -109,16 +114,16 @@ class PlayPluginChain(QtCore.QObject):
                 channels=channels,
                 dtype='float32',
                 callback=self._play_callback,
-                finished_callback=self.play_event.set
+                finished_callback=self.play_event.set,
+                prime_output_buffers_using_stream_callback=True
             )
 
         self.play_block_index = self.stream_wait_data_cnt = 0
         self.play_max_block_index = f.frames / self.blocksize
-        # print("self.play_max_block_index: ", self.play_max_block_index)
-        if start > 0:
-            start = (f.frames * start) - f.frames
-            # print("start pos: %s, max_pos: %s" % (start, f.frames))
-        # print("start=", start)
+        #
+        self.start_position = start
+        if self.start_position > 0:
+            start = (f.frames * self.start_position)
 
         self._is_active = True
 
@@ -127,11 +132,13 @@ class PlayPluginChain(QtCore.QObject):
         self.vst_host.process_chain_start(filename, f.channels, vst_plugins_chain, soundfile.blocks, self._fill_queue_buffer, frames=-1, start=int(start), stop=None)
 
     def stop(self):
-        self.vst_host.process_chain_stop()
-        self.stream.stop()
+        if self.vst_host is not None:
+            self.vst_host.process_chain_stop()
+        if self.stream is not None:
+            self.stream.stop()
         self._is_active = False
-        self.logger.info("Audio stream is STOPED.")
         self.stop_signal.emit()
+        self.logger.info("STOP audio stream")
 
     def is_active(self):
         return self._is_active
