@@ -1,4 +1,4 @@
-# py-neil-vst-gui
+# py-neil-vst-gui 0.5.8b2
 
 GUI application based on py-neil-vst package (Cython-based simple VST 2.4 Host and VST Plugins wrapper)
 
@@ -19,12 +19,12 @@ GUI application based on py-neil-vst package (Cython-based simple VST 2.4 Host a
 - Full open source project
 
 
-## CLI py-neil-vst package
+### CLI py-neil-vst package
 This GUI are based on the py-neil-vst CLI package. It automaticaly installed from
 the 'install_requires' in setup.py from pip repository.
 You can find it code here - https://github.com/LeftRadio/py-neil-vst
 
-## Install from git (Windows):
+### Install from git (Windows):
 ```
 python -m venv neil-vst-venv
 cd neil-vst-venv && Scripts\activate.bat
@@ -32,14 +32,14 @@ pip install Cython
 python -m setup build install
 ```
 
-## Install from pip (Windows):
+### Install from pip (Windows):
 ```
 python -m venv neil-vst-venv
 cd neil-vst-venv && Scripts\activate.bat
 python -m pip install neil-vst-gui
 ```
 
-## py-neil-vst-gui some screenshots
+### py-neil-vst-gui some screenshots:
 
 ![alt text](https://github.com/LeftRadio/py-neil-vst-gui/blob/master/img/0_1.png?raw=true)
 
