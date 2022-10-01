@@ -2,107 +2,111 @@
 
 import os
 import json
-from neil_vst_gui.ui_settings import UI_Settings
+from neil_vst_gui.vst_chain import VSTChain
+from neil_vst_gui.import_files import ImportFiles
+from neil_vst_gui.metadata import Metadata
 
 
-base = { "plugins_chain": {} }
-chain = {"chain": {"title": "", "normalize": {}, "plugins_list": {}}}
-normilize = { "enable": True, "target_rms": 0, "error_db": 0.25 }
-plugin = { "plugin_name": {"path": "", "max_channels": 8, "params": {}} }
-plugin_param = { "Parameter": {"value": 0.0, "fullscale": 1.0, "normalized": True} }
+
 
 
 class Job(object):
     """docstring for Job"""
-    def __init__(self, name="chain 0", in_files=[], out_files=[]):
-        # in/out files
-        self.in_files = in_files
-        self.out_files = out_files
+    def __init__(self, logger=None):
         #
-        self.vst_plugins_chain = []
-        # plugins settings
-        self.settings = { "title": name, "normalize": {}, "plugins_list": {} }
+        self.job_file_default = os.path.dirname(__file__) + "./_job.json"
+        self.job_file = self.job_file_default
         #
-        self.job_file = os.path.dirname(__file__) + "./_job.json"
+        self.__files = ImportFiles()
+        self.__vst_chain = VSTChain(logger=logger)
+        self.__metadata = Metadata()
+
+    def __settings_init(self):
+        return {
+            "title": "def chain",
+            "in_files": [],
+            "out_files": [],
+            "normalize": {},
+            "plugins_list": {},
+            "out_folder": "",
+            "metadata": ()
+        }
+
+    def __update_job_filepath(self, filepath):
+        if filepath is not None:
+            self.job_file = filepath
+            self.last_path = os.path.dirname(filepath)
 
     # -------------------------------------------------------------------------
 
-    def set_in_files(self, in_files):
-        for a in in_files:
-            if a in self.in_files:
-                continue
-            self.in_files.append(a)
+    def files(self):
+        return self.__files
 
-    def file_remove(self, name):
-        self.in_files.remove(name)
+    def vst_chain(self):
+        return self.__vst_chain
 
-    def files_remove_all(self):
-        self.in_files = []
-
-    def set_normalize(self, enable=False, target_rms=-20, error_db=0.25):
-        self.settings["normalize"] = {"enable": enable, "target_rms": target_rms, "error_db": error_db }
-
-    def vst_add_to_chain(self, vst_instance):
-        self.vst_plugins_chain.append(vst_instance)
-
-    def vst_remove_from_chain(self, index):
-        self.vst_plugins_chain.remove(self.vst_plugins_chain[index])
-
-    def vst_swap_in_chain(self, index_0, index_1):
-        swap_plugins = self.vst_plugins_chain[index_0], self.vst_plugins_chain[index_1]
-        self.vst_plugins_chain[index_1], self.vst_plugins_chain[index_0] = swap_plugins
-
-    def vst_remove_all(self):
-        self.vst_plugins_chain = []
+    def metadata(self):
+        return self.__metadata
 
     # -------------------------------------------------------------------------
 
-    def parse_plugin_parameters(self, plugin):
-        parameters = {}
-        for k,v in plugin.parameters_indexes_dict.items():
-            parameters[k] = {"value": plugin.parameter_value(index=v), "fullscale": 1.0, "normalized": True}
-        return parameters
-
-    def plugin_parameters_set(self, plugin, plugin_settings):
-        for k, v in plugin_settings.items():
-            if "normalized" not in v.keys():
-                v["normalized"] = True
-            plugin.parameter_value(name=k, value=v["value"], fullscale=v["fullscale"], normalized=v["normalized"])
-
-    def update(self, filepath=None, normilize_params={}, out_folder="", tag_data=()):
+    def update(self, normilize_params, metadata, filepath=None):
+        #
+        settings = self.__settings_init()
         # update normilize parameters
         if len(normilize_params.keys()):
-            self.settings["normalize"] = normilize_params
+            settings["normalize"] = normilize_params
+        # update import files param
+        settings["in_files"] = self.__files.filelist
         # update out_folder param
-        self.out_folder = out_folder
-        self.tag_data = tag_data
-
+        settings["out_folder"] = self.__files.out_folder
         # update all other parameters
         index = 0
-        self.settings["plugins_list"] = {}
-        for plugin in self.vst_plugins_chain:
-            self.settings["plugins_list"]["%s (%d)" % (plugin.name, index)] = {
+        for plugin in self.__vst_chain.plugins():
+            settings["plugins_list"]["%s (%d)" % (plugin.name, index)] = {
                 "path": plugin.path_to_lib,
                 "max_channels": 8,
-                "params": self.parse_plugin_parameters(plugin)
+                "params": self.__vst_chain.parse_plugin_parameters(plugin)
             }
             index += 1
+        #
+        settings["metadata"] = self.__metadata.data = metadata
         # dump updated parameters
-        self.dump(filepath)
+        self.dump(settings, filepath)
 
     def load(self, filepath=None):
-        if filepath is None:
-            filepath = self.job_file
-        with open(filepath, "r") as f:
-            data = f.read()
-            self.settings = json.loads(data)
+        # update job json filepath
+        self.__update_job_filepath(filepath)
+        # load data from filepath
+        f = open(self.job_file, "r")
+        data = f.read()
+        f.close()
 
-    def dump(self, filepath=None,):
-        if filepath is None:
-            filepath = self.job_file
-        with open(filepath, "w") as f:
-            data = json.dumps(self.settings, indent="    ", ensure_ascii=False, sort_keys=False)
+        settings = {**self.__settings_init(), **json.loads(data)}
+        # set import file list
+        self.__files.update(settings["in_files"])
+        self.__files.out_folder_update(settings["out_folder"])
+        #
+        # self.settings["normalize"]
+        # set VST chain
+        self.__vst_chain.clear()
+        self.__vst_chain.plugins_load(settings["plugins_list"])
+        #
+        self.__metadata.data = settings["metadata"]
+
+    def dump(self, settings, filepath=None):
+        # update job json filepath
+        self.__update_job_filepath(filepath)
+        # serialaze data
+        data = json.dumps(settings, indent="    ", ensure_ascii=False, sort_keys=False)
+        # write data to filepath
+        with open(self.job_file, "w") as f:
             f.write(data)
+
+    def is_default(self):
+        if self.job_file == self.job_file_default:
+            return True
+        return False
 
 
 if __name__ == '__main__':

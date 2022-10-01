@@ -1,31 +1,32 @@
 {
     "_files_out_last_path": "C://",
-    "dock_window_location": 0,
+    "dock_window_location": 2,
     "dock_window_position": [
-        1253,
-        63
+        567,
+        -11
     ],
     "dock_window_size": [
-        644,
-        849
+        456,
+        885
     ],
     "dock_window_visible": true,
-    "files_last_path": "S:/flac",
-    "files_out_last_path": "S:/out",
-    "job_last_path": "S:/",
+    "files_last_path": "E:/Sound/books/\u0414\u0435\u0442\u043a\u0438\u043d/3 - \u041f\u0430\u0440\u0433\u0435\u043b\u0438\u0439/raw/-12",
+    "files_out_last_path": "E:/Sound/books/\u0414\u0435\u0442\u043a\u0438\u043d/3 - \u041f\u0430\u0440\u0433\u0435\u043b\u0438\u0439/out/clean/\u041d\u043e\u0432\u0430\u044f \u043f\u0430\u043f\u043a\u0430",
+    "job_last_path": "E:/Sound/books/\u0414\u0435\u0442\u043a\u0438\u043d/3 - \u041f\u0430\u0440\u0433\u0435\u043b\u0438\u0439/prj",
     "main_window_position": [
-        660,
-        63
+        463,
+        62
     ],
     "main_window_size": [
-        589,
-        849
+        1024,
+        907
     ],
+    "sound_device_index": 5,
     "table_files_columns": [
-        289,
-        82,
-        163
+        282,
+        76,
+        154
     ],
     "theme_style": "Light",
-    "vst_last_path": "C:/Program Files/Common Files/VST2"
+    "vst_last_path": "C:/Program Files/Common Files/VST2/FabFilter/FabFilter Pro-L 2.dll"
 }
