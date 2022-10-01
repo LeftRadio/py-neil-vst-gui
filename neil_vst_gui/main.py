@@ -446,11 +446,11 @@ class neil_vst_gui_window(QtWidgets.QMainWindow):
         self.table_widget_files.setEnabled(False)
 
         self.play_start_pos = self.wave_widget.get_play_position()
-        fileinex = self.table_widget_files.currentRow()
-        self.play_start_thread(self.play_start_pos, fileinex)
+        fileindex = self.table_widget_files.currentRow()
+        self.play_start_thread(self.play_start_pos, fileindex)
 
     def play_start_thread(self, position=0, fileindex=-1):
-        self.play_thread = threading.Thread(target=self.play_start, args=(position,fileidnex,))
+        self.play_thread = threading.Thread(target=self.play_start, args=(position,fileindex,))
         self.play_thread.daemon = True  # thread dies when main thread exits.
         self.play_thread.start()
 
